@@ -15,18 +15,18 @@ type Emulator struct {
 }
 
 // Create a new Emulator instance
-func newEmu(size uint) *Emulator {
+func newEmu(size uint) Emulator {
 	// Create a new Emulator with size `size` of memory
 	m := newMmu(size)
 	e := Emulator{memory: *m}
-	return &e
+	return e
 }
 
 // Create a fork of the emulator
-func (e *Emulator) fork() *Emulator {
+func (e *Emulator) fork() Emulator {
 	m := e.memory.fork()
 	forked := Emulator{memory: *m}
-	return &forked
+	return forked
 }
 
 // Alloc, write, read
@@ -51,7 +51,7 @@ func (emu *Emulator) alloc_write_read(size uint) {
 	// Show dirtied blocks
 	fmt.Printf("[%s]: dirty %v\n", caller, emu.memory.dirty)
 	for i, v := range emu.memory.dirty {
-		fmt.Printf("[%s]: dirty[%d] == %#x\n", caller, i, v.addr)
+		fmt.Printf("[%s]: dirty[%d] == %#x\n", caller, i, v)
 	}
 	fmt.Printf("[%s]: dirty_bitmap length: %d\n", caller, len(emu.memory.dirty_bitmap))
 	for i, v := range emu.memory.dirty_bitmap {
@@ -74,60 +74,49 @@ func main() {
 	// save the current function identifier
 	caller := currentFunc()
 
+	// a buf to read data back out to
+	out_buf := make([]uint8, 32)
+
 	// Create the base Emulator with a 1024 * 1024 guest addr space
 	// This will be the clean state we use to reset forked emulator instances
 	emu := newEmu(1024 * 1024)
-	mmu_mem_base := &emu.memory.memory[0]
-	vm_mem_alloc := &emu.memory.memory[emu.memory.cur_alc.addr]
 
 	// Allocate some memory from the emulator MMU
 	PrintCl(Red, "\n===== PARENT EMULATOR =======")
-	// SetColor(Red)
-	fmt.Printf("[%s]: guest MMU size: %#x\n", caller, len(emu.memory.memory))
-	fmt.Printf("[%s]: guest MMU base address: %p\n", caller, mmu_mem_base)
-	fmt.Printf("[%s]: guest VM allocations begin at: %p (vma:%#x)\n", caller, vm_mem_alloc, emu.memory.cur_alc.addr)
+	fmt.Printf("[%s]: MMU size: %#x\n", caller, len(emu.memory.memory))
+	fmt.Printf("[%s]: vm allocations start at vma:%#x\n", caller, emu.memory.cur_alc.addr)
 	orig_alloc := emu.memory.allocate(4096)
-	// in_buf := []uint8{77, 88, 99, 00}
-	// emu.memory.write_from(orig_alloc, in_buf, uint(4))
+	emu.memory.write_from(orig_alloc, []byte("abcd"), 4)
 	emu.memory.dirty_status()
 
 	// Fork the emulator
 	{
-		// ResetColor()
 		PrintCl(Cyan, "\n===== FORKED EMULATOR =======")
 		forked := emu.fork()
-		// SetColor(Cyan)
+		fmt.Printf("[%s]: vm allocations start at vma:%#x\n", caller, forked.memory.cur_alc.addr)
 
-		fmt.Printf("[%s]: guest MMU size: %#x\n", caller, len(forked.memory.memory))
-		fmt.Printf("[%s]: guest MMU base address: %p\n", caller, mmu_mem_base)
-		fmt.Printf("[%s]: guest VM allocations begin at: %p (vma:%#x)\n", caller, vm_mem_alloc, forked.memory.cur_alc.addr)
-
-		// creata a buf with some data to write to the allocated mem
-		inbuf_2 := make([]uint8, 512)
-		for x := uint(0); x < uint(8); x++ {
-			inbuf_2[x] = 0x41
-			inbuf_2[x*2] = 0x69
-		}
-		// a buf to read data back out to
-		out_buf := make([]uint8, 32)
-
-		// Write from inbuf_2 to the same allocated region but from the forked emulator
-		// This will set the READ perm on the bytes that were written to
-		PrintDbg("Attempt to write data to the region allocated by the original emulator")
-		forked.memory.write_from(orig_alloc, inbuf_2, uint(len(inbuf_2)))
-
-		// Read that data back out
-		PrintDbg("Confirming data was successfully written")
-		forked.memory.read_into(orig_alloc, out_buf, uint(8))
-		PrintDbg("The newly written data should result in dirty blocks being updated")
+		// should be clean at the start of the fork, regardless of the state of the original emulator
 		forked.memory.dirty_status()
+
+		// Write data to the same allocated region but from the forked emulator.
+		// This will set the READ perm on the bytes that were written to.
+		forked.memory.write_from(orig_alloc, []byte("AAAA"), 4)
+		forked.memory.dirty_status()
+
+		// Read the data back out
+		forked.memory.read_into(orig_alloc, out_buf, uint(4))
+		fmt.Println("data:", out_buf[:4])
 
 		// Reset the forked emulator's state back to the original state it started with (from emu)
 		PrintDbg("Resetting the forked MMU back to the original state")
 		forked.memory.reset(&emu.memory)
 
-	}
+		// Read that data back out to confirm state has been reset back to the original values
+		// If no data had been written prior to forking, this should fail because READ perms have not been
+		// set on those bytes (Read-after-Write). This prevents uninitialized data from being read.
+		forked.memory.read_into(orig_alloc, out_buf, uint(4))
+		fmt.Println("data:", out_buf[:4])
 
-	PrintDbg("Operations complete, exiting")
+	}
 
 }

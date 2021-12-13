@@ -40,7 +40,7 @@ type Mmu struct {
 	permissions []Perm
 
 	// Tracks blocks of memory in the MMU which are dirty and will need to be reset
-	dirty []VirtAddr
+	dirty []uint
 
 	// Tracks which parts of memory have been dirtied
 	dirty_bitmap []uint
@@ -55,7 +55,7 @@ func newMmu(size uint) *Mmu {
 		memory:      make([]uint8, size),
 		permissions: make([]Perm, size),
 		// size / DIRTY_BLOCK_SIZE breaks the total size into chunks
-		dirty:        make([]VirtAddr, 0, (size/DIRTY_BLOCK_SIZE + 1)),
+		dirty:        make([]uint, 0, (size/DIRTY_BLOCK_SIZE + 1)),
 		dirty_bitmap: make([]uint, ((size/DIRTY_BLOCK_SIZE)/64 + 1)),
 		cur_alc:      VirtAddr{addr: 0x10000},
 	}
@@ -99,31 +99,33 @@ func (m *Mmu) set_permission(addr VirtAddr, size uint, perm Perm) {
 func (m *Mmu) reset(orig_mmu *Mmu) {
 	for _, block := range m.dirty {
 		// Get the start and end (virtual) addresses of the dirtied blocks of memory
-		start := block.addr
-		end := block.addr + DIRTY_BLOCK_SIZE
+		// `block`` is multiplied up by BLOCK_SIZE to get the vma (was divided by block_size to calculate block)
+		start := block * DIRTY_BLOCK_SIZE
+		end := (block + 1) * DIRTY_BLOCK_SIZE
 
-		bm_idx := (block.addr / DIRTY_BLOCK_SIZE) / 64
-		// OPT: Zero the bitmap.
-		// `block.addr` was previously multiplied back up by DIRTY_BLOCK_SIZE, so we divide
-		// back down for the bitmap indexing
-		// m.dirty_bitmap[bm_idx] = 0
+		// OPT: Zero the bitmap. This hits wide but its okay because we do 64-bit write
+		// anyway, no reason to compute the bit index
+		// start / BLOCK_SIZE / 64 because start == block.addr and we need to break the addr down to it's blocks
+		m.dirty_bitmap[block/64] = 0
 
-		// OPT: set the bitmap back to the values of the original emulator state
-		m.dirty_bitmap[bm_idx] = orig_mmu.dirty_bitmap[bm_idx]
+		//restore memory state and permissions back to original
+		copy(m.memory[start:end], orig_mmu.memory[start:end])
+		copy(m.permissions[start:end], orig_mmu.permissions[start:end])
 
 		// Restore memory state and permissions from the state of the `orig_mmu`
-		for idx := start; idx <= end; idx++ {
-			m.memory[idx] = orig_mmu.memory[idx]
-			m.permissions[idx] = orig_mmu.permissions[idx]
-		}
+		// for idx := start; idx <= end; idx++ {
+		// 	m.memory[idx] = orig_mmu.memory[idx]
+		// 	m.permissions[idx] = orig_mmu.permissions[idx]
+		// }
 		fmt.Printf(
-			"[%s]: reset dirtied blocks at address range vma:%#x-%#x\n", currentFunc(), start, end,
+			"[%s]: reset dirtied blocks at address range vma:%#x-%#x\n", currentFunc(), block*DIRTY_BLOCK_SIZE, end*DIRTY_BLOCK_SIZE,
 		)
 	}
 
-	// Clear the dirty block list
 	// NOTE: KEEPS THE ALLOCATED MEMORY, INDEXING BACK INTO THE LIST WILL FIND THESE VALUES
-	m.dirty = orig_mmu.dirty
+	// m.dirty = orig_mmu.dirty
+	// Clear the dirty block list
+	m.dirty = m.dirty[:0]
 	m.dirty_status()
 }
 
@@ -202,30 +204,25 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 	if block_size == 0 {
 		block_size += 1
 	}
-	// PrintDbg("start:%d end:%d size: %d", block_start, block_end, block_size)
-	fmt.Printf(
-		"[%s]: dirty range %#x:%#x (%d bytes) == %d blocks using dirty_block_size=%d\n",
-		currentFunc(), addr.addr, addr.addr+size, size, block_size, DIRTY_BLOCK_SIZE)
 
 	// Update dirty list and the bitmap for each block found
-	for i := block_start; i < block_end+1; i++ {
+	for block := block_start; block < block_end+1; block++ {
 		// for i := uint(1); i < block_size+1; i++ {
 		// Determine the bitmap position of the dirty block
-		idx := i / 64
-		bit := i % 64
+		idx := block_start / 64
+		bit := block_start % 64
 
 		// If the value at dirty_bitmap[idx] is 0, this hasn't been marked as dirty yet
 		if m.dirty_bitmap[idx]&(1<<bit) == 0 {
 			// Add it to the dirty list
-			// Multiple current i value by dirty block size
-			m.dirty = append(m.dirty, VirtAddr{addr: i * DIRTY_BLOCK_SIZE})
+			m.dirty = append(m.dirty, block)
 
 			// Update the dirty bitmap for this block
 			m.dirty_bitmap[idx] |= 1 << bit
-			fmt.Printf("[%s]: added block to dirty list and updated bitmap\n", currentFunc())
 		}
 	}
 
+	fmt.Printf("[%s]: added %d block(s) to dirty list and updated bitmap\n", currentFunc(), block_size)
 	// Update RaW bits
 	if has_raw == 1 {
 		for i := uint(0); i < size; i++ {
@@ -268,7 +265,7 @@ func (m *Mmu) read_into(addr VirtAddr, buf []uint8, size uint) {
 	for i := uint(0); i < size; i++ {
 		buf[i] = m.memory[addr.addr+i]
 	}
-	fmt.Printf("[%s]: read %v\n", currentFunc(), buf[:size])
+	// fmt.Printf("[%s]: data %v\n", currentFunc(), buf[:size])
 }
 
 // Print the status of the dirty list and dirty_bitmap

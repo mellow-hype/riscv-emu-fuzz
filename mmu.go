@@ -6,10 +6,12 @@ import (
 )
 
 // Constants for permission bits
-const PERM_READ uint8 = 1 << 0
-const PERM_WRITE uint8 = 1 << 1
-const PERM_EXEC uint8 = 1 << 2
-const PERM_RAW uint8 = 1 << 3
+const (
+	PERM_READ uint8 = 1 << iota
+	PERM_WRITE
+	PERM_EXEC
+	PERM_RAW
+)
 
 // Block size used for resetting and tracking memory which has been modified
 // Sweet spot is 128-4096 bytes.
@@ -39,7 +41,7 @@ type Mmu struct {
 	// Holds the permission bytes for each corresponding byte in memory
 	permissions []Perm
 
-	// Tracks blocks of memory in the MMU which are dirty and will need to be reset
+	// Tracks block indices of memory in the MMU which are dirty and will need to be reset
 	dirty []uint
 
 	// Tracks which parts of memory have been dirtied
@@ -112,21 +114,14 @@ func (m *Mmu) reset(orig_mmu *Mmu) {
 		copy(m.memory[start:end], orig_mmu.memory[start:end])
 		copy(m.permissions[start:end], orig_mmu.permissions[start:end])
 
-		// Restore memory state and permissions from the state of the `orig_mmu`
-		// for idx := start; idx <= end; idx++ {
-		// 	m.memory[idx] = orig_mmu.memory[idx]
-		// 	m.permissions[idx] = orig_mmu.permissions[idx]
-		// }
-		fmt.Printf(
-			"[%s]: reset dirtied blocks at address range vma:%#x-%#x\n", currentFunc(), block*DIRTY_BLOCK_SIZE, end*DIRTY_BLOCK_SIZE,
-		)
+		// fmt.Printf(
+		// 	"[%s]: reset dirtied blocks at address range vma:%#x-%#x\n", currentFunc(), block*DIRTY_BLOCK_SIZE, end*DIRTY_BLOCK_SIZE,
+		// )
 	}
 
 	// NOTE: KEEPS THE ALLOCATED MEMORY, INDEXING BACK INTO THE LIST WILL FIND THESE VALUES
-	// m.dirty = orig_mmu.dirty
 	// Clear the dirty block list
 	m.dirty = m.dirty[:0]
-	m.dirty_status()
 }
 
 // Mmu: allocate a region of memory as RW in the guest address space
@@ -144,17 +139,13 @@ func (m *Mmu) allocate(size uint) VirtAddr {
 
 	// Update the cur_alc, adding the size of the new allocation
 	m.cur_alc.addr = m.cur_alc.addr + align_size
-	fmt.Printf(
-		"[%s]: allocated %d bytes in guest addr space at: vma:%#x (phy:%p)\n", currentFunc(), size, base.addr, &m.memory[base.addr],
-	)
+	fmt.Printf("[%s]: allocd %d bytes @ vma:%#x\n", currentFunc(), size, base.addr)
 
 	// Mark newly allocated memory as uninitialized and writable
 	fmt.Printf(
-		"[%s]: setting PERM_RAW|PERM_WRITE for %d bytes at: vma:%#x (phy:%p)\n", currentFunc(), size, base.addr, &m.memory[base.addr],
-	)
+		"[%s]: setting PERM_RAW|PERM_WRITE for %d bytes @ vma:%#x\n", currentFunc(), size, base.addr)
 	m.set_permission(base, size, Perm{PERM_RAW | PERM_WRITE})
 	return base
-
 }
 
 // Mmu: Write bytes from `buf` to `addr`
@@ -174,10 +165,11 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 		panic("bytes to write from buffer is greater than size of buffer")
 	}
 
-	// Check permissions
+	// Check permissions are correct before writing
 	has_raw := 0
 	for _, v := range m.permissions[addr.addr : addr.addr+size] {
-		// check for RAW perm on each byte
+		// check for RAW perm on each byte so we know whether we need to mark bytes
+		// as READ-able after the write
 		if (v.uint8 & PERM_RAW) != 0 {
 			has_raw |= 1
 		}
@@ -188,26 +180,17 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 	}
 
 	// Write bytes from `buf` to `addr`
-	fmt.Printf(
-		"[%s]: writing %d bytes to vma:%#x (phy:%p)\n", currentFunc(), len(buf), addr.addr, &m.memory[addr.addr],
-	)
 	for i := uint(0); i < size; i++ {
 		m.memory[addr.addr+i] = buf[i]
 	}
-	// fmt.Printf("[%s]: payload written:\n %v\n", currentFunc(), buf[:size])
 
 	// Compute the blocks for dirtied bits. We divide the start and end address by the
 	// dirty block size to break them down into blocks.
 	var block_start uint = addr.addr / DIRTY_BLOCK_SIZE
 	var block_end uint = (addr.addr + uint(len(buf))) / DIRTY_BLOCK_SIZE
-	var block_size uint = (block_end - block_start)
-	if block_size == 0 {
-		block_size += 1
-	}
 
 	// Update dirty list and the bitmap for each block found
 	for block := block_start; block < block_end+1; block++ {
-		// for i := uint(1); i < block_size+1; i++ {
 		// Determine the bitmap position of the dirty block
 		idx := block_start / 64
 		bit := block_start % 64
@@ -221,8 +204,6 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 			m.dirty_bitmap[idx] |= 1 << bit
 		}
 	}
-
-	fmt.Printf("[%s]: added %d block(s) to dirty list and updated bitmap\n", currentFunc(), block_size)
 	// Update RaW bits
 	if has_raw == 1 {
 		for i := uint(0); i < size; i++ {
@@ -232,7 +213,14 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 			}
 		}
 	}
-
+	// fmt.Printf(
+	// 	"[%s]: wrote %d bytes to vma:%#x (phy:%p)\n", currentFunc(), len(buf), addr.addr, &m.memory[addr.addr],
+	// )
+	// count := block_end - block_start
+	// if count == 0 {
+	// 	count = 1
+	// }
+	// fmt.Printf("[%s]: added %d block(s) to dirty list and updated bitmap\n", currentFunc(), count)
 }
 
 // Mmu: Read bytes from `addr` into `buf`
@@ -261,11 +249,10 @@ func (m *Mmu) read_into(addr VirtAddr, buf []uint8, size uint) {
 	}
 
 	// Read bytes from `addr` to `buf`
-	fmt.Printf("[%s]: reading %d bytes from vma:%#x (phy:%p)\n", currentFunc(), size, addr.addr, &m.memory[addr.addr])
+	// fmt.Printf("[%s]: reading %d bytes from vma:%#x (phy:%p)\n", currentFunc(), size, addr.addr, &m.memory[addr.addr])
 	for i := uint(0); i < size; i++ {
 		buf[i] = m.memory[addr.addr+i]
 	}
-	// fmt.Printf("[%s]: data %v\n", currentFunc(), buf[:size])
 }
 
 // Print the status of the dirty list and dirty_bitmap

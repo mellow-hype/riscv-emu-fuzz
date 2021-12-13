@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"runtime"
 )
 
@@ -12,6 +13,15 @@ const DEBUG_CONFIRM_RESET bool = true
 type Emulator struct {
 	// Memory space of the emulator
 	memory Mmu
+}
+
+// ELF Section
+type Section struct {
+	file_offset uint
+	virt_addr   VirtAddr
+	file_size   uint
+	mem_size    uint
+	permissions Perm
 }
 
 // Create a new Emulator instance
@@ -27,6 +37,43 @@ func (e *Emulator) fork() Emulator {
 	m := e.memory.fork()
 	forked := Emulator{memory: *m}
 	return forked
+}
+
+// Load an executable using it's sections as described
+func (e *Emulator) load(filePath string, sections []Section) {
+	// Read the entire file directly into a slice
+	file_contents, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		panic("unable to read target file")
+	}
+
+	// Load each section
+	for _, section := range sections {
+		// set bytes to writable
+		e.memory.set_permission(section.virt_addr, section.mem_size, Perm{PERM_WRITE})
+
+		// write in the file contents
+		// file_offsec = offset into the file's bytes at which section starts
+		// file_size = size of the section's data in the file
+		// mem_size = size of the section in the allocated region
+		section_data := file_contents[section.file_offset : section.file_offset+section.file_size]
+		e.memory.write_from(section.virt_addr, section_data, uint(len(section_data)))
+
+		// handle padding
+		if section.mem_size > section.file_size {
+			// padding bytes needed = mem_size - file_size
+			padding := make([]uint8, section.mem_size-section.file_size)
+			e.memory.write_from(
+				// section virt_addr + section.file_size is the address at the end of the data we wrote
+				VirtAddr{section.virt_addr.addr + section.file_size},
+				// starting from that offset, we pad up to what would be the final total mem_size
+				padding,
+				uint(len(padding)))
+		}
+
+		// Demote permissions back to what the section specifies
+		e.memory.set_permission(section.virt_addr, section.mem_size, section.permissions)
+	}
 }
 
 // Alloc, write, read
@@ -74,51 +121,32 @@ func main() {
 	// save the current function identifier
 	caller := currentFunc()
 
+	// PrintCl(Red, "\n===== PARENT EMULATOR =======")
 	// Create the parent emulator with a 1024 * 1024 guest addr space.
 	// This will be the clean state we use to reset forked emulator instances.
-	PrintCl(Red, "\n===== PARENT EMULATOR =======")
 	emu := newEmu(1024 * 1024)
 	fmt.Printf("[%s]: MMU size: %#x\n", caller, len(emu.memory.memory))
 
 	// Allocate some memory from the parent emulator MMU
 	orig_alloc := emu.memory.allocate(4096)
+
 	// Write data to the allocated region. This will set the READ perm on the bytes that were written to and update
 	// the dirty blocks.
-	indata := []byte("abcd")
-	PrintDbg("writing %d bytes (%d) @ vma:%#x", len(indata), indata, orig_alloc.addr)
-	emu.memory.write_from(orig_alloc, indata, uint(len(indata)))
-	emu.memory.dirty_status()
+	// indata := []byte("abcd")
+	// emu.memory.write_from(orig_alloc, indata, uint(len(indata)))
 
 	// Fork the emulator
 	{
 		PrintCl(Cyan, "\n===== FORKED EMULATOR =======")
 		forked := emu.fork()
 
-		// There should be no dirty blocks in the freshly forked emulator, regardless of the parent emulator's
-		// state
-		forked.memory.dirty_status()
-
-		// Write data to the same allocated region but from the forked emulator.
 		indata := []byte("AAAA")
-		PrintDbg("writing %d bytes (%d) @ vma:%#x", len(indata), indata, orig_alloc.addr)
 		forked.memory.write_from(orig_alloc, indata, 4)
-		forked.memory.dirty_status()
 
 		// Read the data back out
 		out_buf := make([]uint8, 32)
 		forked.memory.read_into(orig_alloc, out_buf, uint(4))
-		fmt.Println("data before reset:", out_buf[:4])
-
-		// // Reset the forked emulator's state back to the original state it started with (from emu)
-		PrintDbg("Resetting the forked MMU back to the original state")
 		forked.memory.reset(&emu.memory)
-		forked.memory.dirty_status()
-
-		// // Read that data back out to confirm state has been reset back to the original values set prior to fork.
-		// // If no data had been written prior to forking, this should fail because READ perms have not been
-		// // set on those bytes (Read-after-Write). This prevents uninitialized data from being read.
-		forked.memory.read_into(orig_alloc, out_buf, uint(4))
-		fmt.Println("data after reset:", out_buf[:4])
 	}
 
 }

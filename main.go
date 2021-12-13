@@ -25,9 +25,9 @@ type Section struct {
 }
 
 // Create a new Emulator instance
-func newEmu(size uint) Emulator {
+func NewEmulator(size uint) Emulator {
 	// Create a new Emulator with size `size` of memory
-	m := newMmu(size)
+	m := NewMmu(size)
 	e := Emulator{memory: *m}
 	return e
 }
@@ -118,14 +118,35 @@ func currentFunc() string {
 
 // Main entrypoint
 func main() {
-	// save the current function identifier
-	caller := currentFunc()
-
-	// PrintCl(Red, "\n===== PARENT EMULATOR =======")
 	// Create the parent emulator with a 1024 * 1024 guest addr space.
 	// This will be the clean state we use to reset forked emulator instances.
-	emu := newEmu(1024 * 1024)
-	fmt.Printf("[%s]: MMU size: %#x\n", caller, len(emu.memory.memory))
+	emu := NewEmulator(1024 * 1024)
+
+	// Load an executable into the emulator's address space
+	emu.load("./r64i_test_app", []Section{
+		// THESE VALUES WERE TAKEN DIRECTLY FROM THE OUTPUT OF `readelf -l`
+		{
+			file_offset: 0x0000000000000000,
+			virt_addr:   VirtAddr{0x0000000000010000},
+			file_size:   uint(0x0000000000000190),
+			mem_size:    uint(0x0000000000000190),
+			permissions: Perm{PERM_READ},
+		},
+		{
+			file_offset: 0x0000000000000190,
+			virt_addr:   VirtAddr{0x0000000000011190},
+			file_size:   uint(0x0000000000002598),
+			mem_size:    uint(0x0000000000002598),
+			permissions: Perm{PERM_READ | PERM_EXEC},
+		},
+		{
+			file_offset: 0x0000000000002728,
+			virt_addr:   VirtAddr{0x0000000000014728},
+			file_size:   uint(0x00000000000000f8),
+			mem_size:    uint(0x0000000000000750),
+			permissions: Perm{PERM_READ | PERM_WRITE},
+		},
+	})
 
 	// Allocate some memory from the parent emulator MMU
 	orig_alloc := emu.memory.allocate(4096)
@@ -137,7 +158,6 @@ func main() {
 
 	// Fork the emulator
 	{
-		PrintCl(Cyan, "\n===== FORKED EMULATOR =======")
 		forked := emu.fork()
 
 		indata := []byte("AAAA")

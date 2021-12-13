@@ -52,7 +52,7 @@ type Mmu struct {
 }
 
 // Create a new instance of the MMU struct with of size `size`
-func newMmu(size uint) *Mmu {
+func NewMmu(size uint) *Mmu {
 	m := Mmu{
 		memory:      make([]uint8, size),
 		permissions: make([]Perm, size),
@@ -68,7 +68,7 @@ func newMmu(size uint) *Mmu {
 // and permissions.
 func (m *Mmu) fork() *Mmu {
 	size := uint(len(m.memory))
-	clone := newMmu(size)
+	clone := NewMmu(size)
 	// clone := Mmu{
 	// 	memory:       make([]uint8, size),
 	// 	permissions:  make([]Perm, size),

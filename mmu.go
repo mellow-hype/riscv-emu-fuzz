@@ -131,11 +131,11 @@ func (m *Mmu) allocate(size uint) VirtAddr {
 
 	// Update the cur_alc, adding the size of the new allocation
 	m.cur_alc.addr = m.cur_alc.addr + align_size
-	fmt.Printf("[%s]: allocd %d bytes @ vma:%#x\n", currentFunc(), size, base.addr)
+	fmt.Printf("[alloc]: allocd %d bytes @ vma:%#x\n", size, base.addr)
 
 	// Mark newly allocated memory as uninitialized and writable
 	fmt.Printf(
-		"[%s]: setting PERM_RAW|PERM_WRITE for %d bytes @ vma:%#x\n", currentFunc(), size, base.addr)
+		"[alloc]: setting PERM_RAW|PERM_WRITE for %d bytes @ vma:%#x\n", size, base.addr)
 	m.set_permission(base, size, Perm{PERM_RAW | PERM_WRITE})
 	return base
 }
@@ -256,18 +256,14 @@ func (m *Mmu) read_into_perms(addr VirtAddr, buf []byte, exp_perms Perm) {
 
 // Read `len(buf)` bytes at address `addr` into `buf`
 func (m *Mmu) read_into(addr VirtAddr, buf []byte) {
-	//
+	// Wraps read_into_perms, pass PERM_READ
 	m.read_into_perms(addr, buf, Perm{PERM_READ})
 }
 
-// read into new
-
 // Print the status of the dirty list and dirty_bitmap
-func (m *Mmu) dirty_status() {
-	caller := currentFunc()
+func (m *Mmu) show_dirty_bitmap() {
 	// fmt.Printf("[%s]: dirty %v\n", caller, m.dirty)
-
-	fmt.Printf("[%s]: dirty_bitmap:\n\t", caller)
+	fmt.Printf("dirty_bitmap:\n\t")
 	fmt.Printf("%s| ", White)
 	for x, v := range m.dirty_bitmap {
 		// highlight dirtied bits in red

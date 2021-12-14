@@ -4,7 +4,6 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"runtime"
 )
 
 const DEBUG_CONFIRM_RESET bool = true
@@ -77,9 +76,6 @@ func (e *Emulator) load(filePath string, sections []Section) {
 
 // Alloc, write, read
 func (emu *Emulator) alloc_write_read(size uint) {
-	// save the current function identifier
-	caller := currentFunc()
-
 	// Allocate a `size` byte buffer from the guest addr space
 	guest_alloc := emu.memory.allocate(size)
 
@@ -93,29 +89,9 @@ func (emu *Emulator) alloc_write_read(size uint) {
 	// Read the values from allocation to out_buf
 	out_buf := make([]byte, size)
 	emu.memory.read_into(guest_alloc, out_buf)
-
-	// Show dirtied blocks
-	fmt.Printf("[%s]: dirty %v\n", caller, emu.memory.dirty)
-	for i, v := range emu.memory.dirty {
-		fmt.Printf("[%s]: dirty[%d] == %#x\n", caller, i, v)
-	}
-	fmt.Printf("[%s]: dirty_bitmap length: %d\n", caller, len(emu.memory.dirty_bitmap))
-	for i, v := range emu.memory.dirty_bitmap {
-		fmt.Printf("[%s]: dirty_bitmap[%d] == %#x\n", caller, i, v)
-	}
-
 }
 
-// Return the calling function's name
-func currentFunc() string {
-	pc := make([]uintptr, 15)
-	n := runtime.Callers(2, pc)
-	frames := runtime.CallersFrames(pc[:n])
-	frame, _ := frames.Next()
-	return frame.Function
-}
-
-// Main entrypoint
+// Main
 func main() {
 	// Create the parent emulator with a 1024 * 1024 guest addr space.
 	// This will be the clean state we use to reset forked emulator instances.
@@ -137,7 +113,9 @@ func main() {
 			virt_addr:   VirtAddr{0x0000000000011190},
 			file_size:   uint(0x0000000000002598),
 			mem_size:    uint(0x0000000000002598),
-			permissions: Perm{PERM_READ | PERM_EXEC},
+			// is READ|EXEC in the actual file, but we'll set it to EXEC only since it technically doesn't need
+			// to be readable by the program itself (just by us)
+			permissions: Perm{PERM_EXEC},
 		},
 		// THESE VALUES WERE TAKEN DIRECTLY FROM THE OUTPUT OF `readelf -l`
 		{
@@ -148,21 +126,27 @@ func main() {
 			permissions: Perm{PERM_READ | PERM_WRITE},
 		},
 	})
+	fmt.Println("loaded target binary into memory")
 
-	// Allocate some memory from the parent emulator MMU
-	orig_alloc := emu.memory.allocate(4096)
-
-	// Fork the emulator
 	{
+		// Fork the emulator
 		forked := emu.fork()
 
-		indata := []byte("AAAA")
-		forked.memory.write_from(orig_alloc, indata)
+		// Read the first 4 bytes at the entry point of the executable to confirm we successfully loaded
+		// the ELF sections.
+		out_buf := make([]byte, 4)
+		forked.memory.read_into_perms(
+			// this is the entry point, taken from readelf output (also virt_addr of second section)
+			VirtAddr{addr: uint(0x11190)},
+			out_buf,
+			Perm{PERM_EXEC}) // this region should be EXEC
 
-		// Read the data back out
-		out_buf := make([]byte, 32)
-		forked.memory.read_into(orig_alloc, out_buf)
-		forked.memory.reset(&emu.memory)
+		fmt.Printf("first 4 bytes at entry point (0x11190): ")
+		for _, v := range out_buf {
+			fmt.Printf("%#.2x ", v)
+		}
+		fmt.Println()
+		// forked.memory.reset(&emu.memory)
 	}
 
 }

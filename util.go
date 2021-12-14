@@ -39,3 +39,12 @@ func PrintDbg(message string, a ...interface{}) {
 	fmt.Println(colored_msg)
 	SetColor(ActiveColor)
 }
+
+// Return the calling function's name
+// func currentFunc() string {
+// 	pc := make([]uintptr, 15)
+// 	n := runtime.Callers(2, pc)
+// 	frames := runtime.CallersFrames(pc[:n])
+// 	frame, _ := frames.Next()
+// 	return frame.Function
+// }

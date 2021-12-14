@@ -149,7 +149,7 @@ func (m *Mmu) allocate(size uint) VirtAddr {
 }
 
 // Mmu: Write bytes from `buf` to `addr`
-func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
+func (m *Mmu) write_from(addr VirtAddr, buf []byte, size uint) {
 	// Check if the write operation would go OOB
 	if addr.addr+size > uint(len(m.memory)) {
 		panic("Operation would write OOB of guest address space")

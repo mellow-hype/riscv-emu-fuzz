@@ -223,27 +223,30 @@ func (m *Mmu) write_from(addr VirtAddr, buf []uint8, size uint) {
 	// fmt.Printf("[%s]: added %d block(s) to dirty list and updated bitmap\n", currentFunc(), count)
 }
 
-// Mmu: Read bytes from `addr` into `buf`
-func (m *Mmu) read_into(addr VirtAddr, buf []uint8, size uint) {
+// Mmu: Read bytes from `addr` into `buf` using `exp_perms` for the perm check
+// This function checks to see if all perm bits in `exp_perms` are set in the permissions byes of the MMU
+// where the read will occur. This allows to reading from memory in the MMU where READ has not been set, instead
+// checking the permissions against those provided in `exp_perms`. This is needed so that after the emulator loads the
+// sections from an ELF file into memory and set the appropriate perm bits for each Section, such as EXEC for the
+// program text section, we are still able to read that data out for decoding/parsing/etc.
+func (m *Mmu) read_into_perms(addr VirtAddr, buf []byte, exp_perms Perm) {
 	// Check if the read operation would go OOB
+	size := uint(len(buf))
 	if addr.addr+size > uint(len(m.memory)) {
 		panic("Operation would read OOB of guest address space")
 	}
-
 	// Check if the read operation would go OOB of the current allocation
-	if addr.addr+size > uint(m.cur_alc.addr) {
-		panic("Operation would read beyond the currently allocated space")
-	}
-
-	// Check if the read operation would go OOB of the out_buf
-	if size > uint(len(buf)) {
-		panic("bytes to read from addr is greater than size of dst buffer")
-	}
+	// if addr.addr+size > uint(m.cur_alc.addr) {
+	// 	panic("Operation would read beyond the currently allocated space")
+	// }
 
 	// Check permissions
 	for _, v := range m.permissions[addr.addr : addr.addr+size] {
-		// check for read perm bit on each byte, return error if any don't have it set
-		if !((v.uint8 & PERM_READ) != 0) {
+		// check for `exp_perm` bit on each byte, return error if any don't have it set
+		// this allows us to pass in an arbitrary perm (specifically, non-READ perms), confirm
+		// the perms match that arbitrary perm, but still be able to read even though READ perm isn't set
+		// on that range of bytes
+		if !((v.uint8 & exp_perms.uint8) != 0) {
 			panic("Read permission denied")
 		}
 	}
@@ -254,6 +257,14 @@ func (m *Mmu) read_into(addr VirtAddr, buf []uint8, size uint) {
 		buf[i] = m.memory[addr.addr+i]
 	}
 }
+
+// Read `len(buf)` bytes at address `addr` into `buf`
+func (m *Mmu) read_into(addr VirtAddr, buf []byte) {
+	//
+	m.read_into_perms(addr, buf, Perm{PERM_READ})
+}
+
+// read into new
 
 // Print the status of the dirty list and dirty_bitmap
 func (m *Mmu) dirty_status() {

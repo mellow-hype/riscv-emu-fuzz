@@ -57,7 +57,7 @@ func (e *Emulator) load(filePath string, sections []Section) {
 		// file_size = size of the section data in the file
 		// mem_size = total size of section in memory (can be greater than file_sz for uninit data)
 		section_data := file_contents[section.file_offset : section.file_offset+section.file_size]
-		e.memory.write_from(section.virt_addr, section_data, uint(len(section_data)))
+		e.memory.write_from(section.virt_addr, section_data)
 
 		// handle padding (diff between mem_size and file_size is space for uninit mem, should be 0s)
 		if section.mem_size > section.file_size {
@@ -67,8 +67,7 @@ func (e *Emulator) load(filePath string, sections []Section) {
 				// section virt_addr + section.file_size is the address at the end of the data we wrote
 				VirtAddr{section.virt_addr.addr + section.file_size},
 				// starting from that offset, we pad up to what would be the final total mem_size
-				padding,
-				uint(len(padding)))
+				padding)
 		}
 
 		// Demote permissions back to what the section specifies
@@ -89,7 +88,7 @@ func (emu *Emulator) alloc_write_read(size uint) {
 	for i := uint(0); i < size; i++ {
 		buf = append(buf, 0x66)
 	}
-	emu.memory.write_from(guest_alloc, buf, uint(len(buf)))
+	emu.memory.write_from(guest_alloc, buf)
 
 	// Read the values from allocation to out_buf
 	out_buf := make([]byte, size)
@@ -158,7 +157,7 @@ func main() {
 		forked := emu.fork()
 
 		indata := []byte("AAAA")
-		forked.memory.write_from(orig_alloc, indata, 4)
+		forked.memory.write_from(orig_alloc, indata)
 
 		// Read the data back out
 		out_buf := make([]byte, 32)

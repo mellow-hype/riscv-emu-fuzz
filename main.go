@@ -49,17 +49,17 @@ func (e *Emulator) load(filePath string, sections []Section) {
 
 	// Load each section
 	for _, section := range sections {
-		// set bytes to writable
+		// set bytes to writable for the total mem_size (size of section in memory)
 		e.memory.set_permission(section.virt_addr, section.mem_size, Perm{PERM_WRITE})
 
 		// write in the file contents
-		// file_offsec = offset into the file's bytes at which section starts
-		// file_size = size of the section's data in the file
-		// mem_size = size of the section in the allocated region
+		// file_offset = offset where section starts in file
+		// file_size = size of the section data in the file
+		// mem_size = total size of section in memory (can be greater than file_sz for uninit data)
 		section_data := file_contents[section.file_offset : section.file_offset+section.file_size]
 		e.memory.write_from(section.virt_addr, section_data, uint(len(section_data)))
 
-		// handle padding
+		// handle padding (diff between mem_size and file_size is space for uninit mem, should be 0s)
 		if section.mem_size > section.file_size {
 			// padding bytes needed = mem_size - file_size
 			padding := make([]uint8, section.mem_size-section.file_size)
@@ -92,8 +92,8 @@ func (emu *Emulator) alloc_write_read(size uint) {
 	emu.memory.write_from(guest_alloc, buf, uint(len(buf)))
 
 	// Read the values from allocation to out_buf
-	out_buf := make([]uint8, size)
-	emu.memory.read_into(guest_alloc, out_buf, uint(len(out_buf)))
+	out_buf := make([]byte, size)
+	emu.memory.read_into(guest_alloc, out_buf)
 
 	// Show dirtied blocks
 	fmt.Printf("[%s]: dirty %v\n", caller, emu.memory.dirty)
@@ -132,6 +132,7 @@ func main() {
 			mem_size:    uint(0x0000000000000190),
 			permissions: Perm{PERM_READ},
 		},
+		// THESE VALUES WERE TAKEN DIRECTLY FROM THE OUTPUT OF `readelf -l`
 		{
 			file_offset: 0x0000000000000190,
 			virt_addr:   VirtAddr{0x0000000000011190},
@@ -139,6 +140,7 @@ func main() {
 			mem_size:    uint(0x0000000000002598),
 			permissions: Perm{PERM_READ | PERM_EXEC},
 		},
+		// THESE VALUES WERE TAKEN DIRECTLY FROM THE OUTPUT OF `readelf -l`
 		{
 			file_offset: 0x0000000000002728,
 			virt_addr:   VirtAddr{0x0000000000014728},
@@ -151,11 +153,6 @@ func main() {
 	// Allocate some memory from the parent emulator MMU
 	orig_alloc := emu.memory.allocate(4096)
 
-	// Write data to the allocated region. This will set the READ perm on the bytes that were written to and update
-	// the dirty blocks.
-	// indata := []byte("abcd")
-	// emu.memory.write_from(orig_alloc, indata, uint(len(indata)))
-
 	// Fork the emulator
 	{
 		forked := emu.fork()
@@ -164,8 +161,8 @@ func main() {
 		forked.memory.write_from(orig_alloc, indata, 4)
 
 		// Read the data back out
-		out_buf := make([]uint8, 32)
-		forked.memory.read_into(orig_alloc, out_buf, uint(4))
+		out_buf := make([]byte, 32)
+		forked.memory.read_into(orig_alloc, out_buf)
 		forked.memory.reset(&emu.memory)
 	}
 
